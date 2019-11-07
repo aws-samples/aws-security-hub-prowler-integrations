@@ -1,11 +1,6 @@
-## My Project
+## Use AWS Fargate and Prowler to send AWS Service security configuration findings to Security Hub
+The code in this repo accompanies the AWS Security Blog Post: Use AWS Fargate and Prowler to send AWS Service security configuration findings to Security Hub
 
-TODO: Fill this README out!
-
-Be sure to:
-
-* Change the title in this README
-* Edit your repository description on GitHub
 
 ## License
 

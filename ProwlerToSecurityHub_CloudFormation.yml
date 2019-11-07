@@ -1,0 +1,244 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: This Template will create the supporting infrastructure for the Prowler Fargate AWS Security Blog Post
+Parameters:
+  ProwlerClusterName:
+    Type: String
+    Description: Name of the ECS Cluster that the Prowler Fargate Task will run in
+    Default: ProwlerCluster
+  ProwlerContainerName: 
+    Type: String
+    Description: Name of the Prowler Container Definition within the ECS Task
+  ProwlerContainerInfo: 
+    Type: String
+    Description: URI from ECR or DockerHub of the Prowler Image that will send formatted results to DynamoDB
+  ProwlerExecutionRole:
+    Type: String
+    Description: ARN of the IAM Task Execution Role ECS uses
+  ProwlerTaskRole:
+    Type: String
+    Description: ARN of the Task IAM Role ECS uses
+  ProwlerSecurityGroup:
+    Type: String
+    Description: Security Group that allows at least HTTPS 443 inbound/outbound
+  ProwlerScheduledSubnet1:
+    Type: String
+    Description: Subnet Id in which Prowler can be scheduled to Run
+  ProwlerScheduledSubnet2:
+    Type: String
+    Description: Subnet Id in which Prowler can be scheduled to Run
+Resources:
+  ProwlerReportDynamoDBTable: 
+    Type: AWS::DynamoDB::Table
+    Properties: 
+      AttributeDefinitions: 
+        - 
+          AttributeName: "NOTES"
+          AttributeType: "S"
+      KeySchema: 
+        - 
+          AttributeName: "NOTES"
+          KeyType: "HASH"
+      ProvisionedThroughput: 
+        ReadCapacityUnits: "50"
+        WriteCapacityUnits: "50"
+      TableName: !Sub 'prowler-report-table-${AWS::AccountId}'
+      StreamSpecification:
+        StreamViewType: NEW_IMAGE
+  ProwlerECSCloudWatchLogsGroup:
+    Type: AWS::Logs::LogGroup
+    Properties: 
+      LogGroupName: !Join [ "-", [ !Ref ProwlerContainerName, !Ref 'AWS::StackName' ] ]
+      RetentionInDays: 90
+  ProwlerECSCluster:
+    Type: AWS::ECS::Cluster
+    Properties: 
+      ClusterName: !Ref ProwlerClusterName
+  ProwlerECSTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties: 
+      ContainerDefinitions: 
+        -   
+          Image: !Ref ProwlerContainerInfo
+          Name: !Ref ProwlerContainerName
+          Environment:
+            - Name: MY_DYANMODB_TABLE
+              Value: !Ref ProwlerReportDynamoDBTable
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref ProwlerECSCloudWatchLogsGroup
+              awslogs-region: !Ref 'AWS::Region'
+              awslogs-stream-prefix: ecs
+      Cpu: 2048
+      ExecutionRoleArn: !Ref ProwlerExecutionRole
+      Memory: 4096
+      NetworkMode: awsvpc
+      TaskRoleArn: !Ref ProwlerTaskRole
+      Family: Prowler2SecurityHubTask
+      RequiresCompatibilities:
+        - FARGATE
+  ProwlerTaskScheduler:
+    Type: AWS::Events::Rule
+    Properties:
+      ScheduleExpression: "rate(7 days)"
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt ProwlerECSCluster.Arn
+          RoleArn: !Ref ProwlerTaskRole
+          Id: prowlerTaskScheduler
+          EcsParameters:
+            TaskDefinitionArn: !Ref ProwlerECSTaskDefinition
+            TaskCount: 1
+            LaunchType: FARGATE
+            PlatformVersion: 'LATEST'
+            NetworkConfiguration:
+              AwsVpcConfiguration:
+                AssignPublicIp: ENABLED
+                SecurityGroups:
+                  - !Ref ProwlerSecurityGroup
+                Subnets:
+                  - !Ref ProwlerScheduledSubnet1
+                  - !Ref ProwlerScheduledSubnet2
+  DynamoStreamLambdaMapping:
+    Type: AWS::Lambda::EventSourceMapping
+    Properties:
+      BatchSize: 1
+      Enabled: True
+      EventSourceArn: 
+        Fn::GetAtt: [ ProwlerReportDynamoDBTable , StreamArn ]
+      FunctionName: 
+        Fn::GetAtt: [ ProwlertoSecHubLambdaFunction , Arn ]
+      StartingPosition: LATEST #always start at the tail of the stream
+  ProwlertoSecHubLambdaFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: Prowler2SecurityHub
+      Description: Maps Prowler findings sent from ECS to DynamoDB into the ASFF via DynamoDB Streams before importing to Security Hub
+      Handler: index.lambda_handler
+      MemorySize: 384
+      Role: !GetAtt ProwlertoSecHubLambdaRole.Arn
+      Runtime: python3.7
+      Timeout: 70
+      Environment:
+        Variables:
+          account_num: !Ref 'AWS::AccountId'
+          region: !Ref 'AWS::Region'
+      Code:
+        ZipFile: |
+          import json
+          import boto3
+          import datetime
+          import uuid
+          import os
+          def lambda_handler(event, context):
+              # import Lambda ENV VARs
+              accountId = os.environ['account_num']
+              awsRegion = os.environ['region']
+              # Use Prowler finding notes for ASFF Description
+              prowlerDescription = str(event['Records'][0]['dynamodb']['NewImage']['NOTES']['S'])
+              # Use Prowler finding title text for ASFF Title
+              prowlerTitle = str(event['Records'][0]['dynamodb']['NewImage']['TITLE_TEXT']['S'])
+              # looping through Prowler score result, set severity & compliance based on finding
+              prowlerResult = str(event['Records'][0]['dynamodb']['NewImage']['RESULT']['S'])
+              if prowlerResult == 'PASS':
+                  prowlerComplianceRating = 'PASSED'
+                  prowlerProductSev = int(0)
+                  prowlerProductNorm = int(0)
+              elif prowlerResult == 'INFO':
+                  prowlerComplianceRating = 'NOT_AVAILABLE'
+                  prowlerProductSev = int(1)
+                  prowlerProductNorm = int(1)
+              elif prowlerResult == 'FAIL':
+                  prowlerComplianceRating = 'FAILED'
+                  prowlerProductSev = int(8)
+                  prowlerProductNorm = int(80)
+              else:
+                  print("No Compliance Info Found!")
+              # ISO Time
+              iso8061Time = datetime.datetime.utcnow().replace(tzinfo=datetime.timezone.utc).isoformat()
+              # ASFF BIF Id
+              asffID = str(uuid.uuid4())
+              # import security hub boto3 client
+              sechub = boto3.client('securityhub')
+              # call BIF
+              try:
+                  response = sechub.batch_import_findings(
+                      Findings=[
+                          {
+                              'SchemaVersion': '2018-10-08',
+                              'Id': asffID,
+                              'ProductArn': 'arn:aws:securityhub:' + awsRegion + ':' + accountId + ':product/' + accountId + '/default',
+                              'ProductFields': {
+                                  'ProviderName': 'Prowler',
+                                  'ProviderVersion': 'v2.1.0',
+                                  },
+                              'GeneratorId': asffID,
+                              'AwsAccountId': accountId,
+                              'Types': [ 'Software and Configuration Checks' ],
+                              'FirstObservedAt': iso8061Time,
+                              'UpdatedAt': iso8061Time,
+                              'CreatedAt': iso8061Time,
+                              'Severity': {
+                                  'Product': prowlerProductSev,
+                                  'Normalized': prowlerProductNorm
+                              },
+                              'Title': prowlerTitle,
+                              'Description': prowlerDescription,
+                              'Resources': [
+                                  {
+                                      'Type': 'AwsAccount',
+                                      'Id': 'AWS::::Account:' + accountId,
+                                      'Partition': 'aws',
+                                      'Region': awsRegion,
+                                  }
+                              ],
+                              'WorkflowState': 'NEW',
+                              'Compliance': {'Status': prowlerComplianceRating},
+                              'RecordState': 'ACTIVE'
+                          }
+                      ]
+                  )
+                  print(response)
+              except Exception as e:
+                  print(e)
+                  print("Submitting finding to Security Hub failed, please troubleshoot further")
+                  raise
+  ProwlertoSecHubLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Policies:
+      - PolicyName: Prowler2SecurityHub-Policy
+        PolicyDocument:
+          Version: 2012-10-17
+          Statement:
+          - Effect: Allow
+            Action:
+            - iam:PassRole
+            - cloudwatch:PutMetricData
+            - securityhub:BatchImportFindings
+            Resource: '*'
+          - Effect: Allow
+            Action:
+            - logs:CreateLogGroup
+            - logs:CreateLogStream
+            - logs:PutLogEvents
+            Resource: '*'
+          - Effect: Allow
+            Action:
+            - iam:PassRole
+            - dynamodb:GetRecords
+            - dynamodb:GetShardIterator
+            - dynamodb:DescribeStream
+            - dynamodb:ListStreams
+            Resource: !GetAtt ProwlerReportDynamoDBTable.StreamArn
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+        - Effect: Allow
+          Principal: { Service: lambda.amazonaws.com }
+          Action:
+          - sts:AssumeRole
+Outputs:
+  ProwlerReportDynamoDBTable:
+    Description: DynamoDB Table to upload ETLed Prowler findings
+    Value: !Ref ProwlerReportDynamoDBTable
