@@ -213,7 +213,6 @@ Resources:
           Statement:
           - Effect: Allow
             Action:
-            - iam:PassRole
             - cloudwatch:PutMetricData
             - securityhub:BatchImportFindings
             Resource: '*'
@@ -225,7 +224,6 @@ Resources:
             Resource: '*'
           - Effect: Allow
             Action:
-            - iam:PassRole
             - dynamodb:GetRecords
             - dynamodb:GetShardIterator
             - dynamodb:DescribeStream
