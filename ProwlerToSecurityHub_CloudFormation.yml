@@ -8,15 +8,16 @@ Parameters:
   ProwlerContainerName: 
     Type: String
     Description: Name of the Prowler Container Definition within the ECS Task
+    Default: prowler
   ProwlerContainerInfo: 
     Type: String
-    Description: URI from ECR or DockerHub of the Prowler Image that will send formatted results to DynamoDB
+    Description: ECR URI of the Prowler container
   ProwlerExecutionRole:
     Type: String
-    Description: ARN of the IAM Task Execution Role ECS uses
+    Description: ARN of the IAM Task Execution Role ECS uses to pull images from ECR and send logs to CloudWatch
   ProwlerTaskRole:
     Type: String
-    Description: ARN of the Task IAM Role ECS uses
+    Description: ARN of the Task IAM Role that gives Prowler permissions to perform its checks
   ProwlerSecurityGroup:
     Type: String
     Description: Security Group that allows at least HTTPS 443 inbound/outbound
@@ -25,7 +26,7 @@ Parameters:
     Description: Subnet Id in which Prowler can be scheduled to Run
   ProwlerScheduledSubnet2:
     Type: String
-    Description: Subnet Id in which Prowler can be scheduled to Run
+    Description: A secondary Subnet Id in which Prowler can be scheduled to Run 
 Resources:
   ProwlerReportDynamoDBTable: 
     Type: AWS::DynamoDB::Table
