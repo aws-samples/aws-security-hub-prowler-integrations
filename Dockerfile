@@ -30,18 +30,17 @@ RUN \
     apt install -y python3-pip
 
 # Place scripts
-ADD converter.py /root
 ADD loader.py /root
 ADD script.sh /root
 
 # Installs prowler, moves scripts into prowler directory
 RUN \
     git clone https://github.com/toniblyx/prowler && \
-    mv root/converter.py /prowler && \
     mv root/loader.py /prowler && \
     mv root/script.sh /prowler
 
 # Runs prowler, ETLs ouput with converter and loads DynamoDB with loader
 WORKDIR /prowler
 RUN pip3 install boto3
+RUN pip install prowler
 CMD bash script.sh
