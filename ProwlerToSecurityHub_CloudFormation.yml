@@ -33,11 +33,11 @@ Resources:
     Properties: 
       AttributeDefinitions: 
         - 
-          AttributeName: "NOTES"
+          AttributeName: "Notes"
           AttributeType: "S"
       KeySchema: 
         - 
-          AttributeName: "NOTES"
+          AttributeName: "Notes"
           KeyType: "HASH"
       ProvisionedThroughput: 
         ReadCapacityUnits: "50"
@@ -136,11 +136,11 @@ Resources:
               accountId = os.environ['account_num']
               awsRegion = os.environ['region']
               # Use Prowler finding notes for ASFF Description
-              prowlerDescription = str(event['Records'][0]['dynamodb']['NewImage']['NOTES']['S'])
+              prowlerDescription = str(event['Records'][0]['dynamodb']['NewImage']['Notes']['S'])
               # Use Prowler finding title text for ASFF Title
-              prowlerTitle = str(event['Records'][0]['dynamodb']['NewImage']['TITLE_TEXT']['S'])
+              prowlerTitle = str(event['Records'][0]['dynamodb']['NewImage']['CheckTitle']['S'])
               # looping through Prowler score result, set severity & compliance based on finding
-              prowlerResult = str(event['Records'][0]['dynamodb']['NewImage']['RESULT']['S'])
+              prowlerResult = str(event['Records'][0]['dynamodb']['NewImage']['Status']['S'])
               if prowlerResult == 'PASS':
                   prowlerComplianceRating = 'PASSED'
                   prowlerProductSev = int(0)
